@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { type DatabaseConnection, openDatabase } from "./database.js";
 import { getMetaValue, getSectionCount, validatePackageSchema } from "./db.js";
 
@@ -178,6 +179,20 @@ export class PackageStore {
     const pkg = this.get(spec);
     if (!pkg) return null;
     return openDatabase(pkg.path, { readonly: true });
+  }
+}
+
+/** Load installed packages, ignoring staged downloads and invalid databases. */
+export function loadPackages(store: PackageStore, directory: string): void {
+  if (!existsSync(directory)) return;
+
+  for (const file of readdirSync(directory)) {
+    if (!file.endsWith(".db") || file.startsWith(".downloading-")) continue;
+    try {
+      store.add(readPackageInfo(join(directory, file)));
+    } catch {
+      // Skip invalid packages.
+    }
   }
 }
 

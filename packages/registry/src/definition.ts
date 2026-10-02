@@ -17,12 +17,14 @@
  * Source types:
  * - **git**: Clone a git repository at a specific tag.
  * - **zip**: Download a ZIP archive from a URL. Supports {version} placeholder.
+ * - **html-index**: Download a pinned HTML index and its reference pages.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod/v4";
+import { resolveIndexUrl } from "./html-index.js";
 
 const GitSourceSchema = z.object({
   type: z.literal("git"),
@@ -47,10 +49,25 @@ const ZipSourceSchema = z.object({
   lang: z.string().default("en"),
 });
 
-const SourceSchema = z.discriminatedUnion("type", [
+const UnversionedSourceSchema = z.discriminatedUnion("type", [
   GitSourceSchema,
   ZipSourceSchema,
 ]);
+
+const HtmlIndexSourceSchema = z.object({
+  type: z.literal("html-index"),
+  url: z.string().refine((url) => {
+    try {
+      resolveIndexUrl(url, "1");
+      return true;
+    } catch {
+      return false;
+    }
+  }, "HTML index URL must be HTTPS with a {version} directory and no credentials, query, or fragment"),
+  exclude_paths: z.array(z.string()).optional(),
+  concurrency: z.int().min(1).max(10).default(4),
+  max_pages: z.int().min(1).max(5000).default(2000),
+});
 
 // Git version entry: semver range matching
 const GitVersionEntrySchema = z.object({
@@ -66,9 +83,15 @@ const ZipVersionEntrySchema = z.object({
   source: ZipSourceSchema,
 });
 
+const HtmlIndexVersionEntrySchema = z.object({
+  versions: z.array(z.string().regex(/^\d+(?:[._-][A-Za-z0-9]+)*$/)).min(1),
+  source: HtmlIndexSourceSchema,
+});
+
 const VersionEntrySchema = z.union([
   GitVersionEntrySchema,
   ZipVersionEntrySchema,
+  HtmlIndexVersionEntrySchema,
 ]);
 
 // A definition has either `versions` (versioned) or `source` (unversioned), not both.
@@ -78,7 +101,7 @@ const DefinitionFileSchema = z
     description: z.string().optional(),
     repository: z.url().optional(),
     versions: z.array(VersionEntrySchema).min(1).optional(),
-    source: SourceSchema.optional(),
+    source: UnversionedSourceSchema.optional(),
   })
   .check((ctx) => {
     const hasVersions = ctx.value.versions != null;
@@ -96,9 +119,11 @@ const DefinitionFileSchema = z
 
 export type GitSource = z.infer<typeof GitSourceSchema>;
 export type ZipSource = z.infer<typeof ZipSourceSchema>;
-export type Source = z.infer<typeof SourceSchema>;
+export type HtmlIndexSource = z.infer<typeof HtmlIndexSourceSchema>;
+export type Source = GitSource | ZipSource | HtmlIndexSource;
 export type GitVersionEntry = z.infer<typeof GitVersionEntrySchema>;
 export type ZipVersionEntry = z.infer<typeof ZipVersionEntrySchema>;
+export type HtmlIndexVersionEntry = z.infer<typeof HtmlIndexVersionEntrySchema>;
 export type VersionEntry = z.infer<typeof VersionEntrySchema>;
 export type DefinitionFile = z.infer<typeof DefinitionFileSchema>;
 
@@ -109,10 +134,17 @@ export function isGitVersionEntry(
   return "min_version" in entry;
 }
 
-/** Type guard for zip version entries (have versions array). */
+/** Type guard for ZIP archive releases. */
 export function isZipVersionEntry(
   entry: VersionEntry,
 ): entry is ZipVersionEntry {
+  return entry.source.type === "zip";
+}
+
+/** Entries with an explicit release list, independent of package-manager APIs. */
+export function isExplicitVersionEntry(
+  entry: VersionEntry,
+): entry is ZipVersionEntry | HtmlIndexVersionEntry {
   return "versions" in entry;
 }
 
@@ -130,7 +162,7 @@ export interface VersionedDefinition extends BaseDefinition {
 }
 
 export interface UnversionedDefinition extends BaseDefinition {
-  source: Source;
+  source: GitSource | ZipSource;
   versions?: undefined;
 }
 
@@ -195,31 +227,27 @@ export function loadDefinition(
 
 /**
  * Scan the registry/ directory and load all definitions.
- * Supports scoped packages via @scope subdirectories (e.g., npm/@trpc/server.yaml).
+ * Recurses into subdirectories, so a package name may contain slashes:
+ * npm/@trpc/server.yaml and go/github.com/spf13/cobra.yaml both work.
  */
 export function listDefinitions(registryDir: string): PackageDefinition[] {
   const definitions: PackageDefinition[] = [];
 
-  for (const manager of readdirSync(registryDir, { withFileTypes: true })) {
-    if (!manager.isDirectory()) continue;
-
-    const managerDir = join(registryDir, manager.name);
-    for (const entry of readdirSync(managerDir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(".yaml")) {
-        definitions.push(
-          loadDefinition(join(managerDir, entry.name), managerDir),
-        );
-      } else if (entry.isDirectory() && entry.name.startsWith("@")) {
-        // Scoped package directory (e.g., @trpc/)
-        const scopeDir = join(managerDir, entry.name);
-        for (const file of readdirSync(scopeDir, { withFileTypes: true })) {
-          if (!file.isFile() || !file.name.endsWith(".yaml")) continue;
-          definitions.push(
-            loadDefinition(join(scopeDir, file.name), managerDir),
-          );
-        }
+  const walk = (dir: string, managerDir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, managerDir);
+      } else if (entry.isFile() && entry.name.endsWith(".yaml")) {
+        definitions.push(loadDefinition(full, managerDir));
       }
     }
+  };
+
+  for (const manager of readdirSync(registryDir, { withFileTypes: true })) {
+    if (!manager.isDirectory()) continue;
+    const managerDir = join(registryDir, manager.name);
+    walk(managerDir, managerDir);
   }
 
   return definitions.sort((a, b) =>
@@ -231,7 +259,7 @@ export function listDefinitions(registryDir: string): PackageDefinition[] {
  * Find the first version entry that matches a given version.
  * For git entries: ranges are evaluated top-to-bottom; first match wins.
  *   A version matches if: min_version <= version (< max_version if set).
- * For zip entries: exact match against the versions array.
+ * For ZIP and HTML index entries: exact match against the versions array.
  * Only applicable to versioned definitions.
  */
 export function resolveVersionEntry(
@@ -239,7 +267,7 @@ export function resolveVersionEntry(
   version: string,
 ): VersionEntry | undefined {
   return definition.versions.find((entry) => {
-    if (isZipVersionEntry(entry)) {
+    if (isExplicitVersionEntry(entry)) {
       return entry.versions.includes(version);
     }
     if (compareSemver(version, entry.min_version) < 0) return false;

@@ -19,12 +19,11 @@ import {
   it,
   vi,
 } from "vitest";
-import { loadPackages } from "./cli.js";
 import { initDatabase, openDatabase } from "./database.js";
 import { buildPackage } from "./package-builder.js";
 import { copyPackageFile, createPackageTempFile } from "./package-file.js";
 import { search } from "./search.js";
-import { PackageStore, readPackageInfo } from "./store.js";
+import { loadPackages, PackageStore, readPackageInfo } from "./store.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();

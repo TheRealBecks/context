@@ -17,11 +17,10 @@ import {
   it,
   vi,
 } from "vitest";
-import { loadPackages } from "./cli.js";
 import { initDatabase } from "./database.js";
 import { downloadPackage } from "./download.js";
 import { buildPackage } from "./package-builder.js";
-import { PackageStore, readPackageInfo } from "./store.js";
+import { loadPackages, PackageStore, readPackageInfo } from "./store.js";
 
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -180,11 +179,54 @@ describe.each([
 });
 
 it("uses independent staging files for simultaneous downloads of the same package", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(1000);
-  const results = await Promise.all([download(), download()]);
-  expect(results.map((pkg) => pkg.path)).toEqual([PACKAGE_PATH, PACKAGE_PATH]);
-  expect(new Uint8Array(readFileSync(PACKAGE_PATH))).toEqual(payload);
-  expect(readdirSync(DATA_DIR)).toEqual(["test-lib@1.0.0.db"]);
+  const original = seed(true);
+  const downloads = [0, 1].map(() => {
+    let started: () => void = () => {};
+    let resume: () => void = () => {};
+    const paused = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        new ReadableStream(
+          {
+            async pull(controller) {
+              started();
+              await gate;
+              controller.enqueue(payload);
+              controller.close();
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      ),
+    );
+    return { paused, resume, pending: download() };
+  });
+  const stagingDirectories = () =>
+    readdirSync(DATA_DIR).filter((file) => file.startsWith(".context-"));
+
+  try {
+    await Promise.all(downloads.map(({ paused }) => paused));
+    expect(stagingDirectories()).toHaveLength(2);
+    expect(readFileSync(PACKAGE_PATH)).toEqual(original);
+
+    downloads[0].resume();
+    expect((await downloads[0].pending).path).toBe(PACKAGE_PATH);
+    expect(stagingDirectories()).toHaveLength(1);
+    expect(new Uint8Array(readFileSync(PACKAGE_PATH))).toEqual(payload);
+
+    downloads[1].resume();
+    expect((await downloads[1].pending).path).toBe(PACKAGE_PATH);
+    expect(new Uint8Array(readFileSync(PACKAGE_PATH))).toEqual(payload);
+    expect(readdirSync(DATA_DIR)).toEqual(["test-lib@1.0.0.db"]);
+  } finally {
+    for (const { resume } of downloads) resume();
+    await Promise.allSettled(downloads.map(({ pending }) => pending));
+  }
 });
 
 it("ignores valid files left under legacy temporary download names", () => {

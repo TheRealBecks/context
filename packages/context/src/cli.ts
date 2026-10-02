@@ -4,7 +4,6 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
-  readdirSync,
   statSync,
   unlinkSync,
 } from "node:fs";
@@ -59,6 +58,7 @@ import { ContextServer } from "./server.js";
 import {
   getPackageFileName,
   isAllowedLibrary,
+  loadPackages,
   type PackageInfo,
   PackageStore,
   packageKey,
@@ -505,21 +505,6 @@ function ensureDataDir(): void {
   mkdirSync(DATA_DIR, { recursive: true });
 }
 
-/** Load all packages from the data directory into the store. */
-export function loadPackages(store: PackageStore, directory = DATA_DIR): void {
-  if (!existsSync(directory)) return;
-
-  for (const file of readdirSync(directory)) {
-    if (!file.endsWith(".db") || file.startsWith(".downloading-")) continue;
-    try {
-      const info = readPackageInfo(join(directory, file));
-      store.add(info);
-    } catch {
-      // Skip invalid packages
-    }
-  }
-}
-
 /**
  * Report a finished install.
  *
@@ -561,7 +546,7 @@ function reportInstalled(pkg: {
   );
 
   const store = new PackageStore();
-  loadPackages(store);
+  loadPackages(store, DATA_DIR);
   const preferred = store.get(pkg.name);
   if (!preferred || preferred.version === pkg.version) return;
 
@@ -1066,7 +1051,7 @@ program
   .description("Show installed packages")
   .action(() => {
     const store = new PackageStore();
-    loadPackages(store);
+    loadPackages(store, DATA_DIR);
     const packages = store.list();
 
     if (packages.length === 0) {
@@ -1136,7 +1121,7 @@ program
   .argument("<name>", "Package name (e.g., 'next' or 'next@v16.2.0')")
   .action((name: string) => {
     const store = new PackageStore();
-    loadPackages(store);
+    loadPackages(store, DATA_DIR);
 
     const target = resolveRemoveTarget(name, store.list());
     if ("error" in target) {
@@ -1174,7 +1159,7 @@ program
       libs?: string[];
     }) => {
       const store = new PackageStore();
-      loadPackages(store);
+      loadPackages(store, DATA_DIR);
 
       const allowedLibraries = options.libs
         ? resolveAllowedLibraries(options.libs, store.list())
@@ -1243,7 +1228,7 @@ program
   .argument("<topic>", GET_DOCS_TOPIC_DESCRIPTION)
   .action((library: string, topic: string) => {
     const store = new PackageStore();
-    loadPackages(store);
+    loadPackages(store, DATA_DIR);
 
     const packages = store.list();
     const pkg = store.get(library);

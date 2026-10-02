@@ -1,5 +1,47 @@
 # @neuledge/registry
 
+## 0.0.23
+
+### Patch Changes
+
+- Updated dependencies [[`e3cc56d`](https://github.com/neuledge/context/commit/e3cc56deb57600e63b44d9e8fdaa59d599a65325)]:
+  - @neuledge/context@1.2.10
+
+## 0.0.22
+
+### Patch Changes
+
+- Updated dependencies [[`b66d7ae`](https://github.com/neuledge/context/commit/b66d7ae99bf8d57597b29d42cf0869664f48f95e)]:
+  - @neuledge/context@1.2.9
+
+## 0.0.21
+
+### Patch Changes
+
+- Updated dependencies [[`6a0681c`](https://github.com/neuledge/context/commit/6a0681c4c2cd7a3e41d825a5770451cee6f1ecd2), [`4fdd94b`](https://github.com/neuledge/context/commit/4fdd94b2cf965503899b1d3ccfd6f27e4f9b8e8d)]:
+  - @neuledge/context@1.2.8
+
+## 0.0.20
+
+### Patch Changes
+
+- Updated dependencies [[`e68c31f`](https://github.com/neuledge/context/commit/e68c31fc550e68d4e9b2389f327ef3df0b394e8b)]:
+  - @neuledge/context@1.2.7
+
+## 0.0.19
+
+### Patch Changes
+
+- Updated dependencies [[`8663d2f`](https://github.com/neuledge/context/commit/8663d2f91ebef45afe0cd7c3d517134e88dc6705)]:
+  - @neuledge/context@1.2.6
+
+## 0.0.18
+
+### Patch Changes
+
+- Updated dependencies [[`8cc952d`](https://github.com/neuledge/context/commit/8cc952deb2127e5dff725d274b42bdfe72d4dcf7)]:
+  - @neuledge/context@1.2.5
+
 ## 0.0.17
 
 ### Patch Changes

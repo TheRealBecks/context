@@ -1,5 +1,43 @@
 # @neuledge/context
 
+## 1.2.10
+
+### Patch Changes
+
+- [#173](https://github.com/neuledge/context/pull/173) [`e3cc56d`](https://github.com/neuledge/context/commit/e3cc56deb57600e63b44d9e8fdaa59d599a65325) Thanks [@JayOfTheKeyboard](https://github.com/JayOfTheKeyboard)! - Keep generic types and JSX inside code examples. The MDX tag cleanup also ran inside fenced blocks and inline code, so `createTRPCClient<AppRouter>()` was indexed as `createTRPCClient()`, `List<String>` as `List`, and `<App />` vanished. Every such code line was damaged in the four doc sets measured: 289 in the NestJS docs, 298 in tRPC, 44 in Kysely and 88 in Drizzle. MDX component tags such as `<AppOnly>` outside code are still removed.
+
+## 1.2.9
+
+### Patch Changes
+
+- [#166](https://github.com/neuledge/context/pull/166) [`b66d7ae`](https://github.com/neuledge/context/commit/b66d7ae99bf8d57597b29d42cf0869664f48f95e) Thanks [@JayOfTheKeyboard](https://github.com/JayOfTheKeyboard)! - Keep documentation sections whose folder shares a name with a skipped repo directory (`build`, `examples`, `test`, `dev`, `internal`, `plans`, `spec`, and the rest) when the scan starts inside a docs folder. These names were skipped at every depth, so with `docs_path` set a real section vanished and the build still reported success: `docker/docs` lost its whole Docker Build manual (`content/manuals/build/`, 100 pages), `cloudflare-docs` lost 49 Workers examples, `kysely` lost 40 of its 67 pages and `bun` lost its 32 test-runner guides. Tooling directories (`node_modules`, `dist`, `out`, `fixtures`, `__tests__` and similar) are still skipped everywhere, and a whole-repo scan skips everything it did before.
+
+## 1.2.8
+
+### Patch Changes
+
+- [#168](https://github.com/neuledge/context/pull/168) [`6a0681c`](https://github.com/neuledge/context/commit/6a0681c4c2cd7a3e41d825a5770451cee6f1ecd2) Thanks [@moshest](https://github.com/moshest)! - Keep underscores inside search words, so snake_case identifiers like `spring_boot` match the identifier instead of the separate words.
+
+- [#146](https://github.com/neuledge/context/pull/146) [`4fdd94b`](https://github.com/neuledge/context/commit/4fdd94b2cf965503899b1d3ccfd6f27e4f9b8e8d) Thanks [@TheRealBecks](https://github.com/TheRealBecks)! - Handle search topics as literal keywords with optional quoted phrases, preventing malformed quotes and FTS operator words from causing SQLite errors. Preserve Unicode keywords and add local ingestion-to-retrieval regression fixtures.
+
+## 1.2.7
+
+### Patch Changes
+
+- [#162](https://github.com/neuledge/context/pull/162) [`e68c31f`](https://github.com/neuledge/context/commit/e68c31fc550e68d4e9b2389f327ef3df0b394e8b) Thanks [@moshest](https://github.com/moshest)! - Store documentation paths with forward slashes on Windows. Adding local or git docs on Windows saved paths like `docs\guide.md`, so the same package built on Windows and Linux had different paths.
+
+## 1.2.6
+
+### Patch Changes
+
+- [#125](https://github.com/neuledge/context/pull/125) [`8663d2f`](https://github.com/neuledge/context/commit/8663d2f91ebef45afe0cd7c3d517134e88dc6705) Thanks [@JayOfTheKeyboard](https://github.com/JayOfTheKeyboard)! - Only skip repo-meta filenames (`security`, `license`, `changelog`, `contributing`, and the rest) when the scan starts at the repository root. They were matched by basename at every depth, and also at the top of a `docs_path` folder, so an ordinary documentation page that happens to share one of those names was dropped without a word. `context add` on the forgejo docs lost `docs/admin/actions/security.md`, the only source in that repo for `container.valid_volumes`, and still reported success. `docker/docs` and `excalidraw/excalidraw` lose pages to the same rule.
+
+## 1.2.5
+
+### Patch Changes
+
+- [#137](https://github.com/neuledge/context/pull/137) [`8cc952d`](https://github.com/neuledge/context/commit/8cc952deb2127e5dff725d274b42bdfe72d4dcf7) Thanks [@TheRealBecks](https://github.com/TheRealBecks)! - Preserve code formatting in HTML documentation that uses bare preformatted blocks, including systemd's rendered DocBook manuals.
+
 ## 1.2.4
 
 ### Patch Changes

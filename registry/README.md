@@ -17,6 +17,12 @@ registry/pip/fastapi.yaml        → pip/fastapi
 registry/npm/@trpc/server.yaml   → npm/@trpc/server     (scoped: use a subdirectory)
 ```
 
+Go modules use the full module path, so every slash becomes a subdirectory:
+
+```
+registry/go/github.com/spf13/cobra.yaml   → go/github.com/spf13/cobra
+```
+
 Maven coordinates use `_` in place of `:`, since `:` isn't filesystem-safe:
 
 ```
@@ -72,7 +78,7 @@ versions:
 
 `{version}` is substituted in both `url` and `docs_path`.
 
-### Versioned by git tag — **only for npm, pip, maven and hex**
+### Versioned by git tag — **only for npm, pip, maven, hex and go**
 
 ```yaml
 versions:
@@ -84,13 +90,80 @@ versions:
       docs_path: docs
 ```
 
-> **This shape only works in `npm/`, `pip/`, `maven/` and `hex/`.** Those are the only
+> **This shape only works in `npm/`, `pip/`, `maven/`, `hex/` and `go/`.** Those are the only
 > registries with a version-discovery API, and this shape asks "which versions exist?"
 > before matching them against `min_version`. In any other directory there is nothing
 > to ask, so the build fails with `Unsupported registry: <dir>` — and because one bad
 > definition fails the whole nightly publish, it takes every other package down with it.
 >
-> Outside those four directories, use **unversioned** or **versioned-by-zip**.
+> Outside those five directories, use **unversioned**, **versioned-by-zip**, or **versioned HTML index**.
+
+#### Go modules
+
+Versions come from `proxy.golang.org`. Two things differ from the other registries:
+
+- **Modules in a subdirectory tag with that directory as a prefix.** A module at
+  `github.com/aws/aws-sdk-go-v2/config` is released as the tag `config/v1.31.1`, not
+  `v1.31.1`, so the default `tag_pattern` names a tag that doesn't exist and the version
+  is skipped as "not published yet", every night. Put the subdirectory in the pattern:
+
+  ```yaml
+  versions:
+    - min_version: "1.31.0"
+      tag_pattern: "config/v{version}"
+      source:
+        type: git
+        url: https://github.com/aws/aws-sdk-go-v2
+        docs_path: config
+  ```
+
+- **`+incompatible` releases are not discovered.** Modules that reached v2+ before adopting
+  Go modules (e.g. `github.com/docker/docker`) publish versions like `v25.0.10+incompatible`,
+  which are skipped with the prereleases. Discovery logs a warning when a module has
+  versions but none match; use **unversioned** for these for now.
+
+
+### Versioned HTML index — for published reference manuals
+
+Use `html-index` when a single HTML table of contents links to all reference
+pages. It downloads those links and uses the existing HTML parser:
+
+```yaml
+versions:
+  - versions: ["258"]
+    source:
+      type: html-index
+      url: "https://www.freedesktop.org/software/systemd/man/{version}/"
+      exclude_paths:
+        - "index.html"
+        - "systemd.directives.html"
+```
+
+This source requires explicit numeric release versions (for example `258` or
+`3.14.0`) and an HTTPS URL containing a `{version}` directory segment. Moving
+aliases such as `latest` are rejected. It works in any registry directory.
+The index may be a directory URL or an `.html`/`.htm` file. Only HTML links
+within that index's directory and origin are downloaded; fragments are removed,
+query links are ignored, and linked pages are not crawled recursively. Redirects
+must stay inside the same directory. Exclusions are relative to that directory.
+
+Downloads use four workers by default (`concurrency: 1..10`) and allow up to
+2,000 pages (`max_pages: 1..5000`). Exceeding that limit, a failed page, or an
+empty index fails the build instead of publishing partial documentation.
+Requests have a 30-second timeout, transient failures are retried twice, and
+responses are limited to 10 MiB each and 128 MiB per build. Identical pages are
+indexed once, which avoids duplicate man-page aliases.
+
+Pinned downloads are reused from `.cache/context/html-index` across builds.
+Delete that directory to refetch a corrected upstream release. The nightly
+publisher skips releases already present in the registry. Check the publisher's crawling policy
+before adding an index source.
+
+For systemd, `systemd/systemd` contains the versioned reference manuals and
+`systemd/systemd-guides` contains the Markdown architecture and integration
+guides from Git. These are separate sources and packages; `docs_path` selects
+a directory within one Git or ZIP source.
+
 
 ## Excluding parts of a source
 

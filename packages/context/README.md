@@ -562,6 +562,18 @@ context query nextjs 'middleware authentication'
 # Returns the same JSON format as the MCP get_docs tool
 ```
 
+Topics are literal keywords, matched together (AND). Punctuation separates words,
+so `ExecStart=`, `systemctl --user`, and `spring.main.banner-mode` can be used
+directly. Underscores stay inside a word, so `spring_boot` matches the identifier
+rather than the two words apart. Words such as `AND`, `OR`, `NOT`, and `NEAR` are searched as text;
+advanced FTS syntax is not supported.
+
+Use paired double quotes for a phrase, for example
+`context query nextjs '"server components" rendering'`. Phrase words must appear
+next to each other in order, with the usual search stemming. An unmatched double
+quote is ignored and the remaining words are searched as keywords. Empty or
+punctuation-only topics return no results. These rules also apply to MCP `get_docs`.
+
 ---
 
 ## :gear: Architecture
@@ -629,6 +641,7 @@ Yes! The `registry/` directory has YAML definitions organized by package manager
 - **`registry/npm/`** — JavaScript/TypeScript (Next.js, React, Tailwind, etc.)
 - **`registry/pip/`** — Python (FastAPI, Flask, Django, Pydantic)
 - **`registry/maven/`** — Java (Spring Boot, JUnit, Micrometer)
+- **`registry/go/`** — Go modules, by full module path (Cobra)
 
 To add a package, create a YAML file. Two source types are supported:
 
@@ -667,7 +680,7 @@ versions:
         - "changelog.html"
 ```
 
-Version discovery is supported for npm, PyPI, and Maven Central. See existing definitions for examples.
+Version discovery is supported for npm, PyPI, Maven Central, Hex, and the Go module proxy. See existing definitions for examples.
 
 ---
 
