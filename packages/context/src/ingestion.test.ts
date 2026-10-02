@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { parseDocument } from "./build.js";
 import { initDatabase, openDatabase } from "./database.js";
@@ -285,7 +286,7 @@ it("writes context add reports on success and strict failure without changing th
   const report = join(directory, "report.json");
   const args = [
     "--import",
-    preload,
+    pathToFileURL(preload).href,
     resolve(import.meta.dirname, "../dist/cli.js"),
     "add",
     directory,
