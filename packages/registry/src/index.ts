@@ -12,7 +12,6 @@ export {
   isExplicitVersionEntry,
   isGitVersionEntry,
   isVersioned,
-  isZipVersionEntry,
   listDefinitions,
   loadDefinition,
   type PackageDefinition,
