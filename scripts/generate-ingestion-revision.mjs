@@ -25,163 +25,165 @@ function canonical(value) {
   return value;
 }
 
-export function generateIngestionRevision(root = repository) {
-  const files = new Map();
-  const dependencies = new Map();
-  const lock = parse(readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8"));
+function lockedDependency(state, name, version) {
+  const key = `${name}@${version}`;
+  if (state.dependencies.has(key)) return;
+  const snapshot = state.lock.snapshots[key];
+  // pnpm snapshots retain peer suffixes; package records normally omit them.
+  // Also accept suffix-bearing package records rather than assuming one layout.
+  const pkg =
+    state.lock.packages[key] ?? state.lock.packages[key.replace(/\(.*$/, "")];
+  if (!snapshot || !pkg)
+    throw new Error(`Missing locked ingestion dependency: ${key}`);
+  state.dependencies.set(key, { package: pkg, snapshot });
+  for (const [child, childVersion] of Object.entries({
+    ...snapshot.dependencies,
+    ...snapshot.optionalDependencies,
+  })) {
+    lockedDependency(state, child, childVersion);
+  }
+}
 
-  function dependency(name, version) {
-    const key = `${name}@${version}`;
-    if (dependencies.has(key)) return;
-    const snapshot = lock.snapshots[key];
-    const packageKey = key.replace(/\(.*$/, "");
-    const pkg = lock.packages[packageKey];
-    if (!snapshot || !pkg)
-      throw new Error(`Missing locked ingestion dependency: ${key}`);
-    dependencies.set(key, { package: pkg, snapshot });
-    for (const [child, childVersion] of Object.entries({
-      ...snapshot.dependencies,
-      ...snapshot.optionalDependencies,
-    })) {
-      dependency(child, childVersion);
+function sourceFile(file, content = readFileSync(file, "utf8")) {
+  return ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true);
+}
+
+function followContextExports(state, names) {
+  const index = resolve(state.root, "packages/context/src/index.ts");
+  const unresolved = names && new Set(names);
+  for (const statement of sourceFile(index).statements) {
+    if (
+      !ts.isExportDeclaration(statement) ||
+      statement.isTypeOnly ||
+      !statement.moduleSpecifier
+    )
+      continue;
+    const exported =
+      statement.exportClause && ts.isNamedExports(statement.exportClause)
+        ? statement.exportClause.elements
+            .filter((item) => !item.isTypeOnly)
+            .map((item) => item.name.text)
+        : undefined;
+    if (!names || !exported || exported.some((name) => names.includes(name))) {
+      followImport(state, index, statement.moduleSpecifier.text);
+      for (const name of exported ?? []) unresolved?.delete(name);
     }
   }
-
-  function follow(file, specifier, names) {
-    if (specifier.startsWith("node:")) return;
-    if (specifier.startsWith(".")) {
-      visit(resolve(dirname(file), specifier.replace(/\.js$/, ".ts")));
-      return;
-    }
-    const packageName = specifier.startsWith("@")
-      ? specifier.split("/").slice(0, 2).join("/")
-      : specifier.split("/")[0];
-    if (packageName === "@neuledge/context") {
-      // Resolve the APIs actually imported from the workspace barrel. Changes
-      // to the CLI or server must not invalidate documentation packages.
-      const index = resolve(root, "packages/context/src/index.ts");
-      if (specifier !== packageName) {
-        visit(
-          resolve(
-            root,
-            "packages/context/src",
-            specifier.slice(packageName.length + 1).replace(/\.js$/, ".ts"),
-          ),
-        );
-        return;
-      }
-      const source = ts.createSourceFile(
-        index,
-        readFileSync(index, "utf8"),
-        ts.ScriptTarget.Latest,
-        true,
-      );
-      const unresolved = names && new Set(names);
-      for (const statement of source.statements) {
-        if (
-          !ts.isExportDeclaration(statement) ||
-          statement.isTypeOnly ||
-          !statement.moduleSpecifier
-        )
-          continue;
-        const exported =
-          statement.exportClause && ts.isNamedExports(statement.exportClause)
-            ? statement.exportClause.elements
-                .filter((item) => !item.isTypeOnly)
-                .map((item) => item.name.text)
-            : undefined;
-        if (
-          !names ||
-          !exported ||
-          exported.some((name) => names.includes(name))
-        ) {
-          follow(index, statement.moduleSpecifier.text);
-          for (const name of exported ?? []) unresolved?.delete(name);
-        }
-      }
-      if (unresolved?.size)
-        throw new Error(
-          `Unresolved ingestion exports: ${[...unresolved].join(", ")}`,
-        );
-      return;
-    }
-    const importer = relative(root, file)
-      .replaceAll("\\", "/")
-      .split("/")
-      .slice(0, 2)
-      .join("/");
-    const manifest = lock.importers[importer];
-    const entry =
-      manifest.dependencies?.[packageName] ??
-      manifest.optionalDependencies?.[packageName];
-    if (!entry)
-      throw new Error(
-        `Undeclared ingestion dependency: ${packageName} in ${file}`,
-      );
-    dependency(packageName, entry.version);
-  }
-
-  function visit(file) {
-    const path = relative(root, file).replaceAll("\\", "/");
-    if (files.has(path)) return;
-    const content = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
-    files.set(path, content);
-    const source = ts.createSourceFile(
-      file,
-      content,
-      ts.ScriptTarget.Latest,
-      true,
+  if (unresolved?.size)
+    throw new Error(
+      `Unresolved ingestion exports: ${[...unresolved].join(", ")}`,
     );
-    function walk(node) {
-      if (ts.isImportDeclaration(node)) {
-        const clause = node.importClause;
-        if (clause?.isTypeOnly) return;
-        const bindings = clause?.namedBindings;
-        const names =
-          bindings && ts.isNamedImports(bindings)
-            ? bindings.elements
-                .filter((item) => !item.isTypeOnly)
-                .map((item) => (item.propertyName ?? item.name).text)
-            : undefined;
-        if (names?.length === 0 && !clause?.name) return;
-        follow(file, node.moduleSpecifier.text, names);
-      } else if (
-        ts.isExportDeclaration(node) &&
-        !node.isTypeOnly &&
-        node.moduleSpecifier
-      ) {
-        follow(file, node.moduleSpecifier.text);
-      } else if (
-        ts.isCallExpression(node) &&
-        node.arguments[0] &&
-        ts.isStringLiteral(node.arguments[0])
-      ) {
-        const expression = node.expression.getText(source);
-        if (
-          node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          /^(?:_?require)(?:\.resolve)?$/.test(expression)
-        ) {
-          follow(file, node.arguments[0].text);
-        }
-      }
-      ts.forEachChild(node, walk);
-    }
-    walk(source);
-  }
+}
 
-  visit(resolve(root, "packages/registry/src/build.ts"));
-  dependency(
+function followImport(state, file, specifier, names) {
+  if (specifier.startsWith("node:")) return;
+  if (specifier.startsWith(".")) {
+    visitSource(
+      state,
+      resolve(dirname(file), specifier.replace(/\.js$/, ".ts")),
+    );
+    return;
+  }
+  const packageName = specifier.startsWith("@")
+    ? specifier.split("/").slice(0, 2).join("/")
+    : specifier.split("/")[0];
+  if (packageName === "@neuledge/context") {
+    if (specifier === packageName) {
+      followContextExports(state, names);
+    } else {
+      visitSource(
+        state,
+        resolve(
+          state.root,
+          "packages/context/src",
+          specifier.slice(packageName.length + 1).replace(/\.js$/, ".ts"),
+        ),
+      );
+    }
+    return;
+  }
+  const importer = relative(state.root, file)
+    .replaceAll("\\", "/")
+    .split("/")
+    .slice(0, 2)
+    .join("/");
+  const manifest = state.lock.importers[importer];
+  const entry =
+    manifest.dependencies?.[packageName] ??
+    manifest.optionalDependencies?.[packageName];
+  if (!entry)
+    throw new Error(
+      `Undeclared ingestion dependency: ${packageName} in ${file}`,
+    );
+  lockedDependency(state, packageName, entry.version);
+}
+
+function visitNode(state, file, source, node) {
+  if (ts.isImportDeclaration(node)) {
+    const clause = node.importClause;
+    if (clause?.isTypeOnly) return;
+    const bindings = clause?.namedBindings;
+    const names =
+      bindings && ts.isNamedImports(bindings)
+        ? bindings.elements
+            .filter((item) => !item.isTypeOnly)
+            .map((item) => (item.propertyName ?? item.name).text)
+        : undefined;
+    if (names?.length === 0 && !clause?.name) return;
+    followImport(state, file, node.moduleSpecifier.text, names);
+  } else if (
+    ts.isExportDeclaration(node) &&
+    !node.isTypeOnly &&
+    node.moduleSpecifier
+  ) {
+    followImport(state, file, node.moduleSpecifier.text);
+  } else if (
+    ts.isCallExpression(node) &&
+    node.arguments[0] &&
+    ts.isStringLiteral(node.arguments[0])
+  ) {
+    const expression = node.expression.getText(source);
+    if (
+      node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      /^(?:_?require)(?:\.resolve)?$/.test(expression)
+    ) {
+      followImport(state, file, node.arguments[0].text);
+    }
+  }
+  ts.forEachChild(node, (child) => visitNode(state, file, source, child));
+}
+
+function visitSource(state, file) {
+  const path = relative(state.root, file).replaceAll("\\", "/");
+  if (state.files.has(path)) return;
+  const content = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+  state.files.set(path, content);
+  const source = sourceFile(file, content);
+  visitNode(state, file, source, source);
+}
+
+export function generateIngestionRevision(root = repository) {
+  const state = {
+    root,
+    files: new Map(),
+    dependencies: new Map(),
+    lock: parse(readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8")),
+  };
+  visitSource(state, resolve(root, "packages/registry/src/build.ts"));
+  lockedDependency(
+    state,
     "typescript",
-    lock.importers["packages/registry"].devDependencies.typescript.version,
+    state.lock.importers["packages/registry"].devDependencies.typescript
+      .version,
   );
   // Include the algorithm itself so changes in what we hash also invalidate.
-  files.set(
+  state.files.set(
     "scripts/generate-ingestion-revision.mjs",
     readFileSync(scriptPath, "utf8").replaceAll("\r\n", "\n"),
   );
   const inputs = canonical({
-    files: Object.fromEntries(files),
-    dependencies: Object.fromEntries(dependencies),
+    files: Object.fromEntries(state.files),
+    dependencies: Object.fromEntries(state.dependencies),
   });
   return {
     revision: createHash("sha256").update(JSON.stringify(inputs)).digest("hex"),

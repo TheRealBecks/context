@@ -5,12 +5,14 @@ import {
   getHeadCommit,
 } from "./build.js";
 import { isVersioned, type PackageDefinition } from "./definition.js";
-import { createBuildFingerprint, resolveBuildSource } from "./fingerprint.js";
+import { createBuildFingerprint } from "./fingerprint.js";
+import { formatBuilt } from "./format.js";
 import {
   checkPackageExists,
   type PackageMetadata,
   publishPackage,
 } from "./publish.js";
+import { resolveBuildSource } from "./source.js";
 
 /** Legacy metadata retains the old skip policy until a forced migration. */
 export function publicationSkipReason(
@@ -44,15 +46,18 @@ export async function publishDefinition(
   definition: PackageDefinition,
   version: string,
   outputDir: string,
-  options: { force?: boolean; log?: (message: string) => void } = {},
+  options: {
+    force?: boolean;
+    log?: (message: string) => void;
+    quietSkips?: boolean;
+    onSkip?: (reason: string) => void;
+  } = {},
 ): Promise<BuildResult | undefined> {
   const log = options.log ?? console.log;
   const id = `${definition.registry}/${definition.name}@${version}`;
-  const existing = await checkPackageExists(
-    definition.registry,
-    definition.name,
-    version,
-  );
+  const existing = options.force
+    ? null
+    : await checkPackageExists(definition.registry, definition.name, version);
   const reason = publicationSkipReason(
     definition,
     version,
@@ -60,18 +65,15 @@ export async function publishDefinition(
     options.force,
   );
   if (reason) {
-    log(`Skipping ${id} (${reason})`);
+    options.onSkip?.(reason);
+    if (!options.quietSkips) log(`Skipping ${id} (${reason})`);
     return;
   }
   log(`Building ${id}...`);
   const result = isVersioned(definition)
     ? await buildFromDefinition(definition, version, outputDir)
     : await buildUnversioned(definition, outputDir);
-  const skipped =
-    result.skippedFiles > 0 ? `, ${result.skippedFiles} files skipped` : "";
-  log(
-    `Built: ${result.path} (${result.sectionCount} sections, ${result.totalTokens} tokens${skipped})`,
-  );
+  log(`Built: ${result.path} (${formatBuilt(result)})`);
   log(`Publishing ${id}...`);
   await publishPackage(
     definition.registry,

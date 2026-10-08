@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import {
-  constructTag,
-  isGitVersionEntry,
-  isVersioned,
-  type PackageDefinition,
-  resolveUrl,
-  resolveVersionEntry,
-} from "./definition.js";
+import type { PackageDefinition } from "./definition.js";
+import { resolveBuildSource } from "./source.js";
 
 export function getIngestionRevision(): string {
   // Works from src (tsx) and dist. Runtime needs only the built artifact.
@@ -18,29 +12,6 @@ export function getIngestionRevision(): string {
     ),
   ) as { revision: string };
   return revision;
-}
-
-/** Only the entry selected for this release contributes to its fingerprint. */
-export function resolveBuildSource(
-  definition: PackageDefinition,
-  version: string,
-) {
-  if (!isVersioned(definition)) return definition.source;
-  const entry = resolveVersionEntry(definition, version);
-  if (!entry)
-    throw new Error(
-      `No version entry matches ${version} in ${definition.name}`,
-    );
-  if (isGitVersionEntry(entry)) {
-    return { ...entry.source, ref: constructTag(entry.tag_pattern, version) };
-  }
-  return {
-    ...entry.source,
-    url: resolveUrl(entry.source.url, version),
-    ...(entry.source.type === "zip" && entry.source.docs_path
-      ? { docs_path: resolveUrl(entry.source.docs_path, version) }
-      : {}),
-  };
 }
 
 export function createBuildFingerprint(
@@ -61,7 +32,7 @@ export function createBuildFingerprint(
     ref: source.type === "git" ? (source.ref ?? "HEAD") : undefined,
     docs_path: "docs_path" in source ? source.docs_path : undefined,
     exclude_paths: [...new Set(source.exclude_paths ?? [])].sort(),
-    lang: "lang" in source ? (source.lang ?? "en") : undefined,
+    lang: source.type === "git" ? (source.lang ?? "en") : undefined,
     max_pages:
       source.type === "html-index" ? (source.max_pages ?? 2000) : undefined,
   };

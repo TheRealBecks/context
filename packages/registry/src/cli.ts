@@ -7,14 +7,19 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { type BuildResult, isMissingRefError } from "@neuledge/context";
+import { isMissingRefError } from "@neuledge/context";
 import { Command } from "commander";
-import { buildFromDefinition, buildUnversioned } from "./build.js";
+import {
+  buildFromDefinition,
+  buildUnversioned,
+  MissingSourceRefError,
+} from "./build.js";
 import {
   isExplicitVersionEntry,
   isVersioned,
   listDefinitions,
 } from "./definition.js";
+import { formatBuilt } from "./format.js";
 import { publishDefinition } from "./publication.js";
 import { type AvailableVersion, discoverVersions } from "./version-check.js";
 
@@ -27,19 +32,6 @@ const DEFAULT_REGISTRY_DIR = resolve(
 const program = new Command()
   .name("registry")
   .description("Build context documentation packages from definitions");
-
-/**
- * Describe a finished build.
- *
- * Skipped files are named rather than counted silently: a file too malformed to
- * parse is dropped on its own so one bad document can't fail the build, which is
- * only safe if the count reaches whoever is reading the log.
- */
-function formatBuilt(result: BuildResult): string {
-  const skipped =
-    result.skippedFiles > 0 ? `, ${result.skippedFiles} files skipped` : "";
-  return `${result.sectionCount} sections, ${result.totalTokens} tokens${skipped}`;
-}
 
 program
   .command("list")
@@ -187,6 +179,11 @@ program
 
     let succeeded = 0;
     let skipped = 0;
+    const skipReasons = new Map<string, number>();
+    const recordSkip = (reason: string) => {
+      skipped++;
+      skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+    };
     const failures: { id: string; error: string }[] = [];
 
     for (const def of definitions) {
@@ -219,10 +216,11 @@ program
             opts.output,
             {
               force: opts.force,
+              quietSkips: true,
+              onSkip: recordSkip,
             },
           );
           if (!result) {
-            skipped++;
             continue;
           }
           // Keep failed uploads on disk for recovery; remove successful artifacts.
@@ -231,11 +229,15 @@ program
           succeeded++;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          // A registry can publish a version before its git tag is pushed.
-          // Skip (don't fail) — the next run picks it up once the tag lands.
-          if (isMissingRefError(message)) {
-            console.log(`  Skipping ${id} (git tag not published yet)`);
-            skipped++;
+          // Tags can disappear after publication or not have been pushed yet.
+          if (
+            err instanceof MissingSourceRefError ||
+            isMissingRefError(message)
+          ) {
+            console.warn(
+              `  WARNING ${id}: source tag unavailable; skipping (${message})`,
+            );
+            recordSkip("source tag unavailable");
             continue;
           }
           console.error(`  FAILED ${id}: ${message}`);
@@ -247,7 +249,10 @@ program
     // Summary
     console.log(`\n--- Summary ---`);
     console.log(`Succeeded: ${succeeded}`);
-    console.log(`Skipped (up to date or legacy metadata): ${skipped}`);
+    console.log(`Skipped: ${skipped}`);
+    for (const [reason, count] of skipReasons) {
+      console.log(`  ${reason}: ${count}`);
+    }
     console.log(`Failed: ${failures.length}`);
 
     if (failures.length > 0) {

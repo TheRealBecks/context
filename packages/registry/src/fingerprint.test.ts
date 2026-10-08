@@ -139,6 +139,26 @@ describe("build fingerprints", () => {
     );
   });
 
+  it("ignores language settings that ZIP ingestion does not use", () => {
+    const changed: VersionedDefinition = {
+      ...zip,
+      versions: [
+        {
+          versions: ["1.0"],
+          source: {
+            type: "zip",
+            url: "https://example.com/{version}.zip",
+            docs_path: "docs-{version}",
+            lang: "de",
+          },
+        },
+      ],
+    };
+    expect(createBuildFingerprint(changed, "1.0")).toBe(
+      createBuildFingerprint(zip, "1.0"),
+    );
+  });
+
   it("skips an existing explicit release only when its fingerprint matches", () => {
     const existing = {
       registry: "custom",

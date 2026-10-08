@@ -29,6 +29,10 @@ describe("publication freshness through the CLI", () => {
   let archiveDownloads: number;
   let conflict: boolean;
   let legacy: boolean;
+  let dropUploadResponse: boolean;
+  let metadataReads: number;
+  let entryPoint: string;
+  let preload: string | undefined;
   let repoUrl: string;
   const docs =
     "# Documentation\n\n## Getting started\n\nThis documentation explains how to configure and run the application with a complete example.\n";
@@ -80,6 +84,10 @@ describe("publication freshness through the CLI", () => {
     archiveDownloads = 0;
     conflict = false;
     legacy = false;
+    dropUploadResponse = false;
+    metadataReads = 0;
+    entryPoint = "src/cli.ts";
+    preload = undefined;
 
     server = createServer((request, response) => {
       if (request.url?.startsWith("/source/")) {
@@ -90,6 +98,7 @@ describe("publication freshness through the CLI", () => {
         return;
       }
       if (request.method !== "POST") {
+        metadataReads++;
         response.writeHead(metadata ? 200 : 404, {
           "Content-Type": "application/json",
         });
@@ -128,7 +137,9 @@ describe("publication freshness through the CLI", () => {
           if (!values.name || !values.version)
             throw new Error("Missing package identity");
           metadata = {
-            registry: "custom",
+            registry: decodeURIComponent(
+              request.url?.split("/")[2] ?? "custom",
+            ),
             name: values.name,
             version: values.version,
             source_commit: values.source_commit,
@@ -137,6 +148,12 @@ describe("publication freshness through the CLI", () => {
           };
         } finally {
           db.close();
+        }
+        if (dropUploadResponse) {
+          dropUploadResponse = false;
+          conflict = true;
+          request.socket.destroy();
+          return;
         }
         response.end("{}");
       });
@@ -176,9 +193,9 @@ describe("publication freshness through the CLI", () => {
       const result = await run(
         process.execPath,
         [
-          "--import",
-          "tsx",
-          "src/cli.ts",
+          ...(entryPoint.startsWith("src/") ? ["--import", "tsx"] : []),
+          ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+          entryPoint,
           command,
           ...args,
           "--dir",
@@ -300,4 +317,101 @@ describe("publication freshness through the CLI", () => {
     );
     expect(uploads).toBe(1);
   }, 90_000);
+
+  it("recovers a lost upload response followed by a conflict only after verifying metadata", async () => {
+    defineArchive();
+    dropUploadResponse = true;
+    const published = await cli("publish-all");
+    expect(published.status).toBe(0);
+    expect(published.output).toContain("Succeeded: 1");
+    expect(uploads).toBe(2);
+    expect(metadataReads).toBe(2);
+    expect(currentMetadata().build_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(existsSync(join(root, "output", "custom-docs@1.0.db"))).toBe(false);
+  }, 60_000);
+
+  it.each([
+    "build_fingerprint",
+    "ingestion_revision",
+  ] as const)("rejects a conflicting upload with mismatched %s", async (field) => {
+    defineArchive();
+    expect((await cli("publish", "docs", "1.0")).status).toBe(0);
+    metadata = { ...currentMetadata(), [field]: "different-artifact" };
+    conflict = true;
+    const failed = await cli("publish-all", "--force");
+    expect(failed.status).not.toBe(0);
+    expect(failed.output).toContain("409 Conflict");
+    expect(failed.output).toContain("rebuilt artifact is preserved");
+    expect(existsSync(join(root, "output", "custom-docs@1.0.db"))).toBe(true);
+  }, 60_000);
+
+  it("summarizes unchanged versions without printing each skip", async () => {
+    defineArchive();
+    expect((await cli("publish", "docs", "1.0")).status).toBe(0);
+    const skipped = await cli("publish-all");
+    expect(skipped.status).toBe(0);
+    expect(skipped.output).toContain("Skipped: 1");
+    expect(skipped.output).toContain("build inputs unchanged: 1");
+    expect(skipped.output).not.toContain("Skipping custom/docs@1.0");
+  }, 60_000);
+
+  it("does not request metadata when forcing publication", async () => {
+    defineArchive();
+    expect((await cli("publish", "docs", "1.0")).status).toBe(0);
+    const previousReads = metadataReads;
+    expect((await cli("publish-all", "--force")).status).toBe(0);
+    expect(metadataReads).toBe(previousReads);
+    expect(uploads).toBe(2);
+  }, 60_000);
+
+  it("builds identical fingerprints through the source and built CLIs", async () => {
+    defineGit();
+    expect((await cli("publish", "docs")).status).toBe(0);
+    const sourceMetadata = currentMetadata();
+    entryPoint = "dist/cli.js";
+    expect((await cli("publish", "docs", "--force")).status).toBe(0);
+    expect(currentMetadata()).toEqual(sourceMetadata);
+    expect(uploads).toBe(2);
+  }, 60_000);
+
+  it("warns and skips removed published tags while publishing subsequent versions", async () => {
+    mkdirSync(join(root, "definitions", "npm"));
+    writeFileSync(
+      join(root, "definitions", "npm", "docs.yaml"),
+      `name: docs\nversions:\n  - min_version: "1.0"\n    source:\n      type: git\n      url: ${repoUrl}\n      docs_path: docs\n`,
+    );
+    expect((await cli("publish", "docs", "1.0")).status).toBe(0);
+    execFileSync("git", ["tag", "-d", "v1.0"], { cwd: join(root, "repo") });
+    preload = join(root, "versions.mjs");
+    writeFileSync(
+      preload,
+      `const original = globalThis.fetch;
+globalThis.fetch = (url, init) => String(url).startsWith("https://registry.npmjs.org/")
+  ? Promise.resolve(new Response(JSON.stringify({ versions: { "1.0": {} } })))
+  : original(url, init);\n`,
+    );
+    writeFileSync(
+      join(root, "definitions", "npm", "zzz.yaml"),
+      `name: zzz\nversions:\n  - versions: ["1.0"]\n    source:\n      type: zip\n      url: ${url}/source/{version}.zip\n      docs_path: docs\n`,
+    );
+    const published = await cli("publish-all");
+    expect(published.status).toBe(0);
+    expect(published.output).toContain("WARNING npm/docs@1.0");
+    expect(published.output).toContain("source tag unavailable: 1");
+    expect(published.output).toContain("Succeeded: 1");
+    expect(published.output).toContain("Skipped: 1");
+    expect(published.output).toContain("Failed: 0");
+    expect(uploads).toBe(2);
+  }, 60_000);
+
+  it("reports unreachable source repositories as failures", async () => {
+    defineGit();
+    expect((await cli("publish", "docs")).status).toBe(0);
+    repoUrl = pathToFileURL(join(root, "missing-repository")).href;
+    defineGit();
+    const failed = await cli("publish-all");
+    expect(failed.status).not.toBe(0);
+    expect(failed.output).toContain("Failed: 1");
+    expect(failed.output).not.toContain("source tag unavailable");
+  }, 60_000);
 });

@@ -7,9 +7,19 @@
  */
 
 import { readFileSync } from "node:fs";
+import { initDatabase, openDatabase } from "@neuledge/context";
 import pRetry, { AbortError } from "p-retry";
 
 const DEFAULT_SERVER_URL = "https://api.context.neuledge.com";
+
+class RegistryRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * The registry server occasionally drops a connection or returns 5xx under load.
@@ -25,10 +35,12 @@ function requestWithRetry(
   return pRetry(
     async () => {
       const response = await fetch(url, init);
-      if (response.ok || response.status === 404) return response;
+      if (response.ok || (response.status === 404 && init.method !== "POST"))
+        return response;
 
       const body = await response.text().catch(() => "");
-      const error = new Error(
+      const error = new RegistryRequestError(
+        response.status,
         `${describe()}: ${response.status} ${response.statusText}${body ? ` — ${body}` : ""}`,
       );
       if (response.status < 500) throw new AbortError(error);
@@ -117,13 +129,55 @@ export async function publishPackage(
       () => `Failed to publish ${registry}/${name}@${version}`,
     );
   } catch (error) {
-    if (error instanceof Error && error.message.includes(": 409 ")) {
-      throw new Error(
-        `${error.message}. The registry rejected replacement of this published version. ` +
-          `The rebuilt artifact is preserved at ${dbPath}. Use a registry-supported replacement or artifact revision; --force cannot override the server's policy.`,
-        { cause: error },
-      );
+    let message = error instanceof Error ? error.message : String(error);
+    if (error instanceof RegistryRequestError && error.status === 409) {
+      try {
+        if (await matchesPublishedArtifact(registry, name, version, dbPath))
+          return;
+      } catch (verificationError) {
+        message += `. Could not verify published metadata: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`;
+      }
+      message +=
+        ". The registry rejected replacement of this published version. Use a registry-supported replacement or artifact revision; --force cannot override the server's policy";
     }
-    throw error;
+    throw new Error(
+      `${message}. The rebuilt artifact is preserved at ${dbPath}.`,
+      {
+        cause: error,
+      },
+    );
   }
+}
+
+/** A lost upload response is recoverable only with matching artifact metadata. */
+async function matchesPublishedArtifact(
+  registry: string,
+  name: string,
+  version: string,
+  dbPath: string,
+): Promise<boolean> {
+  await initDatabase();
+  const db = openDatabase(dbPath, { readonly: true });
+  let values: Record<string, string>;
+  try {
+    values = Object.fromEntries(
+      (
+        db.prepare("SELECT key, value FROM meta").all() as {
+          key: string;
+          value: string;
+        }[]
+      ).map(({ key, value }) => [key, value]),
+    );
+  } finally {
+    db.close();
+  }
+  if (!values.build_fingerprint || !values.ingestion_revision) return false;
+  const published = await checkPackageExists(registry, name, version);
+  return (
+    published?.registry === registry &&
+    published.name === name &&
+    published.version === version &&
+    published.build_fingerprint === values.build_fingerprint &&
+    published.ingestion_revision === values.ingestion_revision
+  );
 }

@@ -95,6 +95,17 @@ Check if a package version exists and return its metadata. The publish pipeline 
 
 Servers supporting automatic freshness checks must extract and persist these optional metadata values on every upload, including replacements, and return them here. The client treats fingerprints as opaque; servers should not recompute them. Older packages and servers can omit these fields: versioned packages retain existence-based skipping, unversioned Git packages retain `source_commit` comparison, and unversioned ZIP packages continue rebuilding. The CLI identifies legacy skips and offers `--force` for migration. Returning the fingerprint after a successful rebuild enables subsequent automatic checks; a server that continues omitting it retains the legacy behavior.
 
+Server adoption must be verified in the server deployment; this repository only
+contains the client and protocol contract. Verify that an initial upload returns
+the database's fingerprint and revision, that replacing it updates both fields,
+and that a subsequent metadata request returns the replacement's values.
+
+After an upload returns `409 Conflict`, the client requests metadata to determine
+whether an earlier attempt already succeeded. It accepts success only when the
+package identity, `build_fingerprint`, and `ingestion_revision` match the uploaded
+artifact. Missing or different metadata remains a conflict; an existing version
+alone is not sufficient evidence of a successful upload.
+
 **Response `404 Not Found`:**
 
 ```json

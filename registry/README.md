@@ -205,7 +205,7 @@ before building. A matching fingerprint skips work; changed build inputs cause a
 rebuild and an upload to the same package version. Inputs include the actual Git
 commit (or pinned explicit release), the effective source settings and package
 metadata, and an automatically generated ingestion revision. `docs_path`,
-exclusions, language, source URL/ref, description, or ingestion changes can
+exclusions, Git language filters, source URL/ref, description, or ingestion changes can
 therefore rebuild a package even when the source commit is unchanged. YAML key
 order, comments, exclusion order/duplicates, and unrelated release entries do not
 change the fingerprint.
@@ -242,9 +242,20 @@ pnpm --filter @neuledge/registry registry publish-all --force
 `--force` bypasses freshness checks and rebuilds; it does not override the server's
 replacement policy. Both automatic rebuilds and forced builds upload to the same
 registry/name/version. Servers that allow replacement accept the new artifact;
-servers that return HTTP 409 produce a clear failure and leave the rebuilt `.db`
-on disk. Such servers need their own supported replacement or artifact revision
-policy. Successful `publish-all` uploads remove local build artifacts as before.
+servers that return HTTP 409 are checked for a matching package identity,
+`build_fingerprint`, and `ingestion_revision`. A match confirms that the upload
+already landed, even if its response was lost and the retry returned 409. Missing
+or mismatched metadata produces a clear failure. All failed uploads report the
+preserved `.db` path; successful `publish-all` uploads remove the local artifact.
+
+`--force` rebuilds the derived package using the current source cache; it does not
+refresh downloaded HTML. Delete `.cache/context/html-index` before rebuilding if
+the publisher corrected an existing release's pages.
+
+Bulk publishing summarizes skip reasons instead of logging every unchanged
+version. Missing Git tags are warned about and skipped, including tags removed
+after a package was published. Unreachable repositories and other transport
+failures remain errors.
 
 ## Before opening a PR
 
