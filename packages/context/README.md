@@ -297,6 +297,12 @@ context add ./my-project --name my-lib --pkg-version 2.0 --save ./packages/
 context add ./packages/my-lib@2.0.db
 ```
 
+Rebuilds and installs stage a replacement beside the destination, then close and
+validate it before replacing the installed package. A failed build, download, or
+replacement leaves the previous package available. Temporary files are excluded
+from package discovery. If the operating system blocks replacement of an open
+file (for example, on Windows), close the reader and retry the install.
+
 ---
 
 ## :whale: Docker
@@ -541,6 +547,8 @@ context serve --libs react next@15.0.4
 | `--libs <names...>` | Restrict the session to a fixed set of installed libraries. Each entry is a name (`react`, exposing every installed version) or `name@version` (`react@18.3.1`, exposing only that version). When set, `search_packages` and `download_package` are hidden so the session is locked to that list. Useful for per-project scoping when you have many packages installed globally. |
 
 The HTTP transport uses the [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) protocol, enabling multiple clients on the local network to connect to a single server instance. The endpoint is available at `http://<host>:<port>/mcp`.
+
+Running stdio sessions reload automatically. While a stdio `context serve` is connected, a separate `context add` or `context remove` updates the server's installed-package list and refreshes the `get_docs` tool, so the connected MCP client picks up the change via a `tools/list_changed` notification without reconnecting or restarting the server. This live reload is stdio-only: an HTTP server started with `--http` does not watch the package directory, so restart it to see packages added or removed by the CLI.
 
 ### `context query <library> <topic>`
 

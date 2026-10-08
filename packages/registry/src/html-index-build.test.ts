@@ -15,7 +15,6 @@ import { buildFromDefinition } from "./build.js";
 import {
   isExplicitVersionEntry,
   isVersioned,
-  isZipVersionEntry,
   loadDefinition,
   resolveVersionEntry,
   type VersionedDefinition,
@@ -64,7 +63,7 @@ describe("HTML index registry integration", () => {
     expect(isVersioned(def)).toBe(true);
     const entry = resolveVersionEntry(def as VersionedDefinition, "258");
     expect(entry && isExplicitVersionEntry(entry)).toBe(true);
-    expect(entry && isZipVersionEntry(entry)).toBe(false);
+    expect(entry?.source.type).toBe("html-index");
     expect(
       resolveVersionEntry(def as VersionedDefinition, "257"),
     ).toBeUndefined();
@@ -147,8 +146,8 @@ describe("HTML index registry integration", () => {
     const guides = loadDefinition(join(root, "systemd-guides.yaml"));
     expect(guides.source).toMatchObject({
       type: "git",
-      ref: "v258",
       docs_path: "docs",
     });
+    expect(guides.source).not.toHaveProperty("ref");
   });
 });

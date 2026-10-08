@@ -134,13 +134,6 @@ export function isGitVersionEntry(
   return "min_version" in entry;
 }
 
-/** Type guard for ZIP archive releases. */
-export function isZipVersionEntry(
-  entry: VersionEntry,
-): entry is ZipVersionEntry {
-  return entry.source.type === "zip";
-}
-
 /** Entries with an explicit release list, independent of package-manager APIs. */
 export function isExplicitVersionEntry(
   entry: VersionEntry,
