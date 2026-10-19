@@ -219,6 +219,26 @@ it("keeps failed HTML downloads fatal and attaches their relative path", async (
   });
 });
 
+it("does not print an ingestion failure summary for an invalid build request", () => {
+  const definitions = join(directory, "registry");
+  mkdirSync(definitions);
+  const failed = spawnSync(
+    process.execPath,
+    [
+      resolve(import.meta.dirname, "../dist/cli.js"),
+      "build",
+      "missing",
+      "--dir",
+      definitions,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(failed.status).not.toBe(0);
+  expect(failed.stderr).toContain("not found");
+  expect(failed.stderr).not.toContain("Ingestion:");
+  expect(failed.stdout).not.toContain("Ingestion:");
+});
+
 it("writes CLI JSON diagnostics for Git builds and strict failures without changing the package", () => {
   const repository = join(directory, "source");
   const definitions = join(directory, "registry");

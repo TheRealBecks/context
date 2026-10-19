@@ -563,7 +563,7 @@ function reportBuilt(
 
   if (result.skippedFiles > 0) {
     console.log(
-      `⚠️  Skipped ${result.skippedFiles} file(s) that could not be parsed`,
+      `⚠️  Skipped ${result.skippedFiles} file${result.skippedFiles === 1 ? "" : "s"} that could not be parsed`,
     );
   }
 }

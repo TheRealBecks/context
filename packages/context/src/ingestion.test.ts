@@ -16,7 +16,13 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { parseDocument } from "./build.js";
 import { initDatabase, openDatabase } from "./database.js";
 import { readLocalDocsFiles } from "./git.js";
-import { type IngestionDiagnostic, IngestionError } from "./ingestion.js";
+import {
+  createIngestionReport,
+  formatIngestionSummary,
+  type IngestionDiagnostic,
+  IngestionError,
+} from "./ingestion.js";
+import { fetchLinkedDocs } from "./llms-txt.js";
 import { buildPackage } from "./package-builder.js";
 
 vi.mock("node:fs", async (original) => {
@@ -272,6 +278,129 @@ it("allows intentional exclusions and duplicates in strict mode, counting only i
     duplicateOf: "a.md",
   });
 });
+
+it("reports HTTP, transport and empty linked-page failures without dropping successful documents", async () => {
+  const diagnostics: IngestionDiagnostic[] = [];
+  const files = await fetchLinkedDocs(
+    "- [Guide](/guide)\n- [Missing](/missing)\n- [Offline](/offline)\n- [Empty](/empty)",
+    "https://docs.example/llms.txt",
+    {
+      diagnostics,
+      fetchImpl: vi.fn(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/offline") throw new TypeError("Network unavailable");
+        if (path === "/missing")
+          return new Response("Missing", { status: 404 });
+        return new Response(
+          path === "/empty" ? " \n" : "## Guide\n\nWorking documentation.",
+        );
+      }),
+    },
+  );
+  expect(files.map((file) => file.path)).toEqual(["docs.example/guide.md"]);
+  expect(createIngestionReport(diagnostics).summary).toMatchObject({
+    unreadableFiles: 2,
+    emptyFiles: 1,
+  });
+  expect(diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        path: "docs.example/missing.md",
+        outcome: "read-error",
+        reason: "HTTP 404",
+      }),
+      expect.objectContaining({
+        path: "docs.example/offline.md",
+        outcome: "read-error",
+        reason: "Network unavailable",
+      }),
+      expect.objectContaining({
+        path: "docs.example/empty.md",
+        outcome: "empty",
+      }),
+    ]),
+  );
+});
+
+it.each([0, 1, 2])("formats ingestion counts correctly for %i", (count) => {
+  const report = createIngestionReport([]);
+  for (const key of Object.keys(
+    report.summary,
+  ) as (keyof typeof report.summary)[]) {
+    report.summary[key] = count;
+  }
+  const summary = formatIngestionSummary(report);
+  expect(summary).toContain(
+    `${count} documentation file${count === 1 ? "" : "s"} discovered`,
+  );
+  expect(summary).toContain(`${count} section${count === 1 ? "" : "s"};`);
+  expect(summary).toContain(
+    `${count} file${count === 1 ? "" : "s"}/${count} director${count === 1 ? "y" : "ies"}`,
+  );
+  expect(summary).toContain(`${count} duplicate${count === 1 ? "" : "s"},`);
+  expect(summary).toContain(`${count} parse failure${count === 1 ? "" : "s"},`);
+  expect(summary).toContain(`${count} empty file${count === 1 ? "" : "s"}`);
+});
+
+it.each([
+  "http",
+  "transport",
+  "empty",
+])("strict website builds reject %s linked-page failures and preserve the installed package", (failure) => {
+  const home = join(directory, "website-user");
+  const preload = join(directory, "website-fetch.mjs");
+  const index =
+    "# Website\n\n- [Guide](/guide.md)\n- [Unavailable](/unavailable.md)";
+  writeFileSync(
+    preload,
+    `
+    import os from 'node:os';
+    import { syncBuiltinESMExports } from 'node:module';
+    os.homedir = () => ${JSON.stringify(home)};
+    syncBuiltinESMExports();
+    globalThis.fetch = async (input) => {
+      const path = new URL(input).pathname;
+      if (path === '/llms.txt') return new Response(${JSON.stringify(index)});
+      if (path === '/guide.md') return new Response('## Guide\\n\\nWorking linked documentation.');
+      if (path === '/unavailable.md') {
+        if (${JSON.stringify(failure)} === 'transport') throw new TypeError('Network unavailable');
+        if (${JSON.stringify(failure)} === 'empty') return new Response('  ');
+      }
+      return new Response('Missing', { status: 404 });
+    };
+  `,
+  );
+  const report = join(directory, "website-report.json");
+  const args = [
+    "--import",
+    pathToFileURL(preload).href,
+    resolve(import.meta.dirname, "../dist/cli.js"),
+    "add",
+    "https://docs.example/llms.txt",
+    "--name",
+    "website",
+    "--diagnostics",
+    report,
+  ];
+  const normal = spawnSync(process.execPath, args, { encoding: "utf8" });
+  expect(normal.status, normal.stderr).toBe(0);
+  const installed = join(home, ".context", "packages", "website@latest.db");
+  const original = readFileSync(installed);
+  const strict = spawnSync(process.execPath, [...args, "--strict"], {
+    encoding: "utf8",
+  });
+  expect(strict.status, strict.stderr).toBe(1);
+  expect(strict.stderr).toContain("Strict ingestion validation failed");
+  expect(readFileSync(installed)).toEqual(original);
+  expect(JSON.parse(readFileSync(report, "utf8")).entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        path: "docs.example/unavailable.md",
+        outcome: failure === "empty" ? "empty" : "read-error",
+      }),
+    ]),
+  );
+}, 15_000);
 
 it("writes context add reports on success and strict failure without changing the installed package", () => {
   const home = join(directory, "isolated-user");

@@ -475,7 +475,12 @@ function findMarkdownFiles(
       }
     } else if (entry.isDirectory()) {
       files.push(
-        ...findMarkdownFiles(join(dirPath, entry.name), ig, relativePath, options),
+        ...findMarkdownFiles(
+          join(dirPath, entry.name),
+          ig,
+          relativePath,
+          options,
+        ),
       );
     } else if (entry.isFile() && matchingExt) {
       files.push(relativePath);
@@ -500,14 +505,16 @@ function entryExclusionReason(
     if (
       IGNORED_DIRS.has(name) ||
       (options.atRepoRoot && REPO_ROOT_IGNORED_DIRS.has(name))
-    ) return "directory-filter";
+    )
+      return "directory-filter";
     const lang = options.lang?.toLowerCase();
     if (
       isLocaleDir(entry.name) &&
       lang !== "all" &&
       lang !== name &&
       !(!lang && name === "en")
-    ) return "language-filter";
+    )
+      return "language-filter";
     return;
   }
   if (!entry.isFile()) return "not-a-regular-file";
@@ -518,7 +525,8 @@ function entryExclusionReason(
     !relativePath.includes("/") &&
     options.atRepoRoot &&
     IGNORED_FILES.has(baseName)
-  ) return "repo-metadata";
+  )
+    return "repo-metadata";
   const parts = baseName.split(".");
   if (parts.length > 1 && FIXTURE_SUFFIXES.includes(parts.at(-1) ?? "")) {
     return "test-fixture";

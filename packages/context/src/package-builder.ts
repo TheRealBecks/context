@@ -7,7 +7,6 @@ import { dirname } from "node:path";
 import { type DocSection, parseDocument } from "./build.js";
 import { openDatabase } from "./database.js";
 import { REMOVED_TAGS } from "./html.js";
-import { createPackageTempFile } from "./package-file.js";
 import {
   createIngestionReport,
   type IngestionDiagnostic,
@@ -15,6 +14,7 @@ import {
   ingestionErrorReason,
   validateIngestion,
 } from "./ingestion.js";
+import { createPackageTempFile } from "./package-file.js";
 
 /**
  * Generate a content hash for section deduplication.
