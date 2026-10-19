@@ -65,6 +65,7 @@ function zip(files: Record<string, string>): Uint8Array {
   return new Uint8Array(Buffer.concat([...local, index, end]));
 }
 
+// Creating and validating the SQLite fixture can exceed 5s on Windows CI.
 it("carries ZIP exclusions, duplicate sections and empty documents into the build report", async () => {
   const content = "## ZIP Guide\n\nRun the archived documentation example.";
   const archive = zip({
@@ -130,7 +131,7 @@ it("carries ZIP exclusions, duplicate sections and empty documents into the buil
     buildFromDefinition(definition, "1", directory, { strict: true }),
   ).rejects.toBeInstanceOf(IngestionError);
   expect(readFileSync(result.path)).toEqual(original);
-});
+}, 15_000);
 
 it("uses the same outcomes for HTML index exclusions, aliases and empty pages", async () => {
   const page =
