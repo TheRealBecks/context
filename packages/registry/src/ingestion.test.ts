@@ -1,7 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -223,6 +225,8 @@ it("keeps failed HTML downloads fatal and attaches their relative path", async (
 it("does not print an ingestion failure summary for an invalid build request", () => {
   const definitions = join(directory, "registry");
   mkdirSync(definitions);
+  const report = join(directory, "blocked-report.json");
+  mkdirSync(report);
   const failed = spawnSync(
     process.execPath,
     [
@@ -231,20 +235,23 @@ it("does not print an ingestion failure summary for an invalid build request", (
       "missing",
       "--dir",
       definitions,
+      "--diagnostics",
+      report,
     ],
     { encoding: "utf8" },
   );
   expect(failed.status).not.toBe(0);
   expect(failed.stderr).toContain("not found");
+  expect(failed.stderr).toContain("Could not write ingestion diagnostics");
   expect(failed.stderr).not.toContain("Ingestion:");
   expect(failed.stdout).not.toContain("Ingestion:");
 });
 
-it("writes CLI JSON diagnostics for Git builds and strict failures without changing the package", () => {
+function gitCliFixture() {
   const repository = join(directory, "source");
   const definitions = join(directory, "registry");
   const output = join(directory, "output");
-  const report = join(directory, "report.json");
+  const report = join(directory, "reports", "nested", "report.json");
   mkdirSync(repository);
   mkdirSync(join(definitions, "test"), { recursive: true });
   writeFileSync(
@@ -284,6 +291,11 @@ it("writes CLI JSON diagnostics for Git builds and strict failures without chang
     "--diagnostics",
     report,
   ];
+  return { args, report, output, repository };
+}
+
+it("writes CLI JSON diagnostics for Git builds and strict failures without changing the package", () => {
+  const { args, report, output } = gitCliFixture();
   const normal = spawnSync(process.execPath, args, { encoding: "utf8" });
   expect(normal.status, normal.stderr).toBe(0);
   expect(normal.stdout).toContain("Ingestion:");
@@ -299,6 +311,7 @@ it("writes CLI JSON diagnostics for Git builds and strict failures without chang
   });
   const packagePath = join(output, "test-fixture@latest.db");
   const original = readFileSync(packagePath);
+  rmSync(join(directory, "reports"), { recursive: true });
   const strict = spawnSync(process.execPath, [...args, "--strict"], {
     encoding: "utf8",
   });
@@ -315,4 +328,59 @@ it("writes CLI JSON diagnostics for Git builds and strict failures without chang
       }),
     ]),
   );
-}, 20_000);
+
+  rmSync(report);
+  mkdirSync(report);
+  const failedReport = spawnSync(process.execPath, [...args, "--strict"], {
+    encoding: "utf8",
+  });
+  expect(failedReport.status).not.toBe(0);
+  expect(failedReport.stderr).toContain("Strict ingestion validation failed");
+  expect(failedReport.stderr).toContain(
+    "Could not write ingestion diagnostics",
+  );
+  expect(readFileSync(packagePath)).toEqual(original);
+}, 30_000);
+
+it.each([
+  false,
+  true,
+])("keeps registry output unchanged when its report cannot be written (existing: %s)", (existing) => {
+  const { args, report, output, repository } = gitCliFixture();
+  const packagePath = join(output, "test-fixture@latest.db");
+  let original: Buffer | undefined;
+  if (existing) {
+    const initial = spawnSync(process.execPath, args, { encoding: "utf8" });
+    expect(initial.status, initial.stderr).toBe(0);
+    original = readFileSync(packagePath);
+    rmSync(report);
+  }
+  writeFileSync(
+    join(repository, "guide.md"),
+    "## Replacement\n\nChanged documentation must not be installed.",
+  );
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Ingestion Test",
+      "-c",
+      "user.email=ingestion@example.invalid",
+      "commit",
+      "--quiet",
+      "-am",
+      "Replacement",
+    ],
+    { cwd: repository },
+  );
+  mkdirSync(report, { recursive: true });
+  const failed = spawnSync(process.execPath, args, { encoding: "utf8" });
+  expect(failed.status).not.toBe(0);
+  expect(failed.stderr).toContain("Could not write ingestion diagnostics");
+  expect(failed.stdout).not.toContain("Built:");
+  if (original) expect(readFileSync(packagePath)).toEqual(original);
+  else expect(existsSync(packagePath)).toBe(false);
+  expect(readdirSync(output)).toEqual(
+    existing ? ["test-fixture@latest.db"] : [],
+  );
+}, 30_000);

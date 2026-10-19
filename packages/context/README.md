@@ -326,6 +326,11 @@ exclusions and duplicate content remain acceptable. The JSON report is also
 written when strict validation fails. These options apply to documentation
 builds, not installation of prebuilt `.db` files.
 
+Report parent directories are created automatically. Successful builds save the
+requested report before replacing the installed package; a report-write failure
+leaves the installed package unchanged. If reporting also fails after a build
+error, the CLI preserves the original error and reports both failures.
+
 The report has `schemaVersion`, `summary`, and per-path `entries`. Discovered
 files are documentation candidates actually visited within the selected source;
 selected files exclude intentional exclusions and duplicates. Indexed sections

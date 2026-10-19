@@ -299,6 +299,9 @@ collected before the abort.
 `--strict` fails on read errors, parse errors, and documents producing no sections.
 It does not reject exclusions or duplicates, and validation failures leave any
 existing output package unchanged. The report is written on strict failure too.
+Report parent directories are created automatically. When a report is requested,
+the built package stays staged until the report is saved. A report-write failure
+leaves existing output unchanged, and reporting failures never mask a build error.
 The default remains a tolerant build with visible diagnostics. For library use,
 `buildFromDefinition` and `buildUnversioned` accept an optional final
 `{ strict, diagnostics }` argument and return `diagnostics` with the build result.

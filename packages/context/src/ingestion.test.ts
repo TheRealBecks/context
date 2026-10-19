@@ -412,7 +412,7 @@ it("writes context add reports on success and strict failure without changing th
   );
   copyFileSync(join(fixtures, "guide.md"), join(directory, "docs", "guide.md"));
   writeFileSync(join(directory, "docs", "empty.md"), "");
-  const report = join(directory, "report.json");
+  const report = join(directory, "reports", "nested", "report.json");
   const args = [
     "--import",
     pathToFileURL(preload).href,
@@ -438,6 +438,7 @@ it("writes context add reports on success and strict failure without changing th
   });
   const installed = join(home, ".context", "packages", "fixture@1.db");
   const original = readFileSync(installed);
+  rmSync(join(directory, "reports"), { recursive: true });
   const strict = spawnSync(process.execPath, [...args, "--strict"], {
     encoding: "utf8",
   });
@@ -449,4 +450,72 @@ it("writes context add reports on success and strict failure without changing th
       expect.objectContaining({ path: "docs/empty.md", outcome: "empty" }),
     ]),
   );
-}, 15_000);
+
+  // A secondary report error must not hide the strict validation failure.
+  rmSync(report);
+  mkdirSync(report);
+  const failedReport = spawnSync(process.execPath, [...args, "--strict"], {
+    encoding: "utf8",
+  });
+  expect(failedReport.status).toBe(1);
+  expect(failedReport.stderr).toContain("Strict ingestion validation failed");
+  expect(failedReport.stderr).toContain(
+    "Could not write ingestion diagnostics",
+  );
+  expect(readFileSync(installed)).toEqual(original);
+}, 20_000);
+
+it.each([
+  false,
+  true,
+])("does not install a package when writing its report fails (existing: %s)", (existing) => {
+  const home = join(directory, "report-user");
+  const preload = join(directory, "report-os.mjs");
+  writeFileSync(
+    preload,
+    `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`,
+  );
+  const guide = join(directory, "docs", "guide.md");
+  writeFileSync(guide, "## Original\n\nPreviously installed documentation.");
+  const args = [
+    "--import",
+    pathToFileURL(preload).href,
+    resolve(import.meta.dirname, "../dist/cli.js"),
+    "add",
+    directory,
+    "--path",
+    "docs",
+    "--name",
+    "report-fixture",
+    "--pkg-version",
+    "1",
+  ];
+  const installed = join(home, ".context", "packages", "report-fixture@1.db");
+  let original: Buffer | undefined;
+  if (existing) {
+    const initial = spawnSync(process.execPath, args, { encoding: "utf8" });
+    expect(initial.status, initial.stderr).toBe(0);
+    original = readFileSync(installed);
+  }
+  writeFileSync(
+    guide,
+    "## Replacement\n\nNew documentation must remain staged.",
+  );
+  // A directory as the target reliably rejects the write on every OS/user.
+  const report = join(directory, "blocked-report.json");
+  mkdirSync(report);
+  const failed = spawnSync(
+    process.execPath,
+    [...args, "--diagnostics", report],
+    { encoding: "utf8" },
+  );
+  expect(failed.status).toBe(1);
+  expect(failed.stderr).toContain("Could not write ingestion diagnostics");
+  expect(failed.stdout).not.toContain("✓ Built package:");
+  expect(failed.stdout).not.toContain("✓ Saved to");
+  if (original) expect(readFileSync(installed)).toEqual(original);
+  else expect(existsSync(installed)).toBe(false);
+  expect(readdirSync(join(home, ".context", "packages"))).toEqual(
+    existing ? ["report-fixture@1.db"] : [],
+  );
+}, 20_000);

@@ -6,11 +6,10 @@ import {
   mkdirSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Command } from "commander";
 
@@ -52,11 +51,13 @@ import {
   type IngestionDiagnostic,
   IngestionError,
 } from "./ingestion.js";
+import { writeIngestionReport } from "./ingestion-report.js";
 import { fetchLinkedDocs } from "./llms-txt.js";
 import {
   type BuildResult,
   buildPackage,
   type MarkdownFile,
+  type PackageBuildOptions,
 } from "./package-builder.js";
 import { copyPackageFile, createPackageTempFile } from "./package-file.js";
 import { type SearchResult, search } from "./search.js";
@@ -360,12 +361,17 @@ async function addFromWebsite(
     );
 
     console.log(`Building package...`);
-    const result = buildPackage(outputPath, files, {
-      strict: options.strict,
-      name: packageName,
-      version: versionLabel,
-      sourceUrl: source,
-    });
+    const result = buildWithDiagnostics(
+      outputPath,
+      files,
+      {
+        strict: options.strict,
+        name: packageName,
+        version: versionLabel,
+        sourceUrl: source,
+      },
+      options.diagnostics,
+    );
 
     if (result.sectionCount === 0) {
       throw new Error(
@@ -373,13 +379,7 @@ async function addFromWebsite(
       );
     }
 
-    reportBuilt(
-      result,
-      packageName,
-      versionLabel,
-      outputPath,
-      options.diagnostics,
-    );
+    reportBuilt(result, packageName, versionLabel, outputPath);
 
     if (options.save) {
       savePackageCopy(outputPath, options.save, packageName, versionLabel);
@@ -430,13 +430,18 @@ async function addFromWebsite(
   );
 
   console.log(`Building package...`);
-  const result = buildPackage(outputPath, files, {
-    diagnostics,
-    strict: options.strict,
-    name: packageName,
-    version: versionLabel,
-    sourceUrl: source,
-  });
+  const result = buildWithDiagnostics(
+    outputPath,
+    files,
+    {
+      diagnostics,
+      strict: options.strict,
+      name: packageName,
+      version: versionLabel,
+      sourceUrl: source,
+    },
+    options.diagnostics,
+  );
 
   if (result.sectionCount === 0) {
     throw new Error(
@@ -444,13 +449,7 @@ async function addFromWebsite(
     );
   }
 
-  reportBuilt(
-    result,
-    packageName,
-    versionLabel,
-    outputPath,
-    options.diagnostics,
-  );
+  reportBuilt(result, packageName, versionLabel, outputPath);
 
   // Save to custom path if specified
   if (options.save) {
@@ -550,21 +549,37 @@ function reportBuilt(
   name: string,
   version: string,
   outputPath: string,
-  diagnosticsPath?: string,
 ): void {
   console.log(`✓ Built package: ${name}@${version}`);
   console.log(`✓ Saved to ${outputPath}`);
   console.log(formatIngestionSummary(result.diagnostics));
-  if (diagnosticsPath)
-    writeFileSync(
-      resolve(diagnosticsPath),
-      `${JSON.stringify(result.diagnostics, null, 2)}\n`,
-    );
 
   if (result.skippedFiles > 0) {
     console.log(
       `⚠️  Skipped ${result.skippedFiles} file${result.skippedFiles === 1 ? "" : "s"} that could not be parsed`,
     );
+  }
+}
+
+/** Keep the installed package unchanged until its requested report is saved. */
+function buildWithDiagnostics(
+  outputPath: string,
+  files: MarkdownFile[],
+  options: PackageBuildOptions,
+  diagnosticsPath?: string,
+): BuildResult {
+  if (!diagnosticsPath) return buildPackage(outputPath, files, options);
+  if (resolve(diagnosticsPath) === resolve(outputPath)) {
+    throw new Error("Diagnostics and package output paths must differ");
+  }
+  const staged = createPackageTempFile(dirname(outputPath));
+  try {
+    const result = buildPackage(staged.path, files, options);
+    writeIngestionReport(diagnosticsPath, result.diagnostics);
+    staged.install(outputPath);
+    return { ...result, path: outputPath };
+  } finally {
+    staged.cleanup();
   }
 }
 
@@ -917,21 +932,20 @@ async function addFromGitClone(
     );
 
     console.log(`Building package...`);
-    const result = buildPackage(outputPath, files, {
-      strict: options.strict,
-      name: packageName,
-      version: versionLabel,
-      sourceUrl: url,
-      diagnostics,
-    });
-
-    reportBuilt(
-      result,
-      packageName,
-      versionLabel,
+    const result = buildWithDiagnostics(
       outputPath,
+      files,
+      {
+        strict: options.strict,
+        name: packageName,
+        version: versionLabel,
+        sourceUrl: url,
+        diagnostics,
+      },
       options.diagnostics,
     );
+
+    reportBuilt(result, packageName, versionLabel, outputPath);
 
     // Save to custom path if specified
     if (options.save) {
@@ -1007,21 +1021,20 @@ async function addFromLocalDir(
   );
 
   console.log(`Building package...`);
-  const result = buildPackage(outputPath, files, {
-    strict: options.strict,
-    name: packageName,
-    version: versionLabel,
-    sourceUrl: dirPath,
-    diagnostics,
-  });
-
-  reportBuilt(
-    result,
-    packageName,
-    versionLabel,
+  const result = buildWithDiagnostics(
     outputPath,
+    files,
+    {
+      strict: options.strict,
+      name: packageName,
+      version: versionLabel,
+      sourceUrl: dirPath,
+      diagnostics,
+    },
     options.diagnostics,
   );
+
+  reportBuilt(result, packageName, versionLabel, outputPath);
 
   // Save to custom path if specified
   if (options.save) {
@@ -1114,11 +1127,17 @@ program
       } catch (err) {
         if (err instanceof IngestionError) {
           console.error(formatIngestionSummary(err.diagnostics));
-          if (options.diagnostics)
-            writeFileSync(
-              resolve(options.diagnostics),
-              `${JSON.stringify(err.diagnostics, null, 2)}\n`,
-            );
+          if (options.diagnostics) {
+            try {
+              writeIngestionReport(options.diagnostics, err.diagnostics);
+            } catch (reportError) {
+              console.error(
+                reportError instanceof Error
+                  ? reportError.message
+                  : reportError,
+              );
+            }
+          }
         }
         console.error(`Error: ${err instanceof Error ? err.message : err}`);
         process.exit(1);

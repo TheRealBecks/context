@@ -5,8 +5,8 @@
  * Not shipped to users — used for building and publishing context packages.
  */
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import {
   createIngestionReport,
   formatIngestionSummary,
@@ -14,6 +14,7 @@ import {
   IngestionError,
   type IngestionReport,
   isMissingRefError,
+  writeIngestionReport,
 } from "@neuledge/context";
 import { Command } from "commander";
 import {
@@ -111,6 +112,8 @@ program
   .action(async (name, version, opts) => {
     const diagnostics: IngestionDiagnostic[] = [];
     let report: IngestionReport | undefined;
+    let stagingDirectory: string | undefined;
+    let buildCompleted = false;
     try {
       const def = findDefinition(opts.dir, name);
       mkdirSync(opts.output, { recursive: true });
@@ -122,24 +125,47 @@ program
       console.log(
         `Building ${def.registry}/${def.name}@${version ?? "latest"}...`,
       );
+      if (opts.diagnostics) {
+        stagingDirectory = mkdtempSync(join(opts.output, ".registry-build-"));
+      }
+      const buildDirectory = stagingDirectory ?? opts.output;
       const options = { strict: opts.strict, diagnostics };
       const result = isVersioned(def)
-        ? await buildFromDefinition(def, version, opts.output, options)
-        : await buildUnversioned(def, opts.output, options);
+        ? await buildFromDefinition(def, version, buildDirectory, options)
+        : await buildUnversioned(def, buildDirectory, options);
+      buildCompleted = true;
       report = result.diagnostics;
+      if (opts.diagnostics) {
+        const destination = resolve(opts.output, basename(result.path));
+        if (resolve(opts.diagnostics) === destination) {
+          throw new Error("Diagnostics and package output paths must differ");
+        }
+        writeIngestionReport(opts.diagnostics, report);
+        renameSync(result.path, destination);
+        result.path = destination;
+      }
       console.log(`Built: ${result.path} (${formatBuilt(result)})`);
     } catch (error) {
       if (error instanceof IngestionError) {
         report = error.diagnostics;
         console.error(formatIngestionSummary(report));
       }
+      if (opts.diagnostics && !buildCompleted) {
+        try {
+          writeIngestionReport(
+            opts.diagnostics,
+            report ?? createIngestionReport(diagnostics),
+          );
+        } catch (reportError) {
+          console.error(
+            reportError instanceof Error ? reportError.message : reportError,
+          );
+        }
+      }
       throw error;
     } finally {
-      if (opts.diagnostics)
-        writeFileSync(
-          resolve(opts.diagnostics),
-          `${JSON.stringify(report ?? createIngestionReport(diagnostics), null, 2)}\n`,
-        );
+      if (stagingDirectory)
+        rmSync(stagingDirectory, { recursive: true, force: true });
     }
   });
 

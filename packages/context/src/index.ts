@@ -54,6 +54,7 @@ export {
   ingestionErrorReason,
   validateIngestion,
 } from "./ingestion.js";
+export { writeIngestionReport } from "./ingestion-report.js";
 export {
   type BuildResult,
   buildPackage,
